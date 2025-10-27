@@ -1,7 +1,7 @@
 {
   "name": "denver-golf-mcp",
-  "version": "1.0.0",
-  "description": "MCP server providing information about Denver area golf courses",
+  "version": "2.0.0",
+  "description": "MCP server for booking tee times at City of Denver golf courses",
   "type": "module",
   "main": "build/index.js",
   "scripts": {
@@ -9,11 +9,12 @@
     "prepare": "npm run build",
     "watch": "tsc --watch"
   },
-  "keywords": ["mcp", "golf", "denver"],
+  "keywords": ["mcp", "golf", "denver", "booking", "tee-times"],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.5.0"
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "playwright": "^1.40.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

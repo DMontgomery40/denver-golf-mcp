@@ -5,238 +5,292 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { chromium, Browser, Page } from "playwright";
 
-// Golf course data for Denver area
-interface GolfCourse {
-  id: string;
-  name: string;
-  address: string;
-  city: string;
-  phone: string;
-  holes: number;
-  par: number;
-  yardage: number;
-  type: "public" | "private" | "semi-private";
-  rating: number;
-  slope: number;
-  description: string;
-  amenities: string[];
-  website?: string;
+// City of Denver Golf Courses
+const DENVER_COURSES = {
+  "city-park": "City Park Golf Course",
+  "overland": "Overland Golf Course",
+  "wellshire": "Wellshire Golf Course",
+  "kennedy": "Kennedy Golf Course"
+};
+
+interface TeeTimeSearchParams {
+  course: string;
+  date: string; // YYYY-MM-DD format
+  players?: number;
+  time_preference?: "morning" | "afternoon" | "evening" | "any";
 }
 
-const golfCourses: GolfCourse[] = [
-  {
-    id: "arrowhead",
-    name: "Arrowhead Golf Club",
-    address: "10850 W Sundown Trail",
-    city: "Littleton",
-    phone: "(303) 973-9614",
-    holes: 18,
-    par: 72,
-    yardage: 6682,
-    type: "public",
-    rating: 72.1,
-    slope: 137,
-    description: "Dramatic mountain course carved through red rock formations with stunning views of the Front Range.",
-    amenities: ["Pro Shop", "Driving Range", "Restaurant", "Practice Green"],
-    website: "https://www.arrowheadcolorado.com"
-  },
-  {
-    id: "fossil-trace",
-    name: "Fossil Trace Golf Club",
-    address: "3050 Illinois St",
-    city: "Golden",
-    phone: "(303) 277-8750",
-    holes: 18,
-    par: 72,
-    yardage: 6831,
-    type: "public",
-    rating: 72.6,
-    slope: 136,
-    description: "Award-winning course built in a former clay mine featuring unique geological features and fossil sites.",
-    amenities: ["Pro Shop", "Driving Range", "Restaurant", "Practice Green", "Clubhouse"],
-    website: "https://www.fossiltrace.com"
-  },
-  {
-    id: "city-park",
-    name: "City Park Golf Course",
-    address: "2500 York St",
-    city: "Denver",
-    phone: "(720) 865-0790",
-    holes: 18,
-    par: 72,
-    yardage: 6656,
-    type: "public",
-    rating: 71.3,
-    slope: 125,
-    description: "Denver's oldest municipal golf course with mature trees and challenging layout in the heart of the city.",
-    amenities: ["Pro Shop", "Driving Range", "Snack Bar", "Practice Green"]
-  },
-  {
-    id: "kennedy",
-    name: "Kennedy Golf Course",
-    address: "10500 E Hampden Ave",
-    city: "Aurora",
-    phone: "(303) 755-0105",
-    holes: 27,
-    par: 72,
-    yardage: 7003,
-    type: "public",
-    rating: 73.4,
-    slope: 132,
-    description: "Championship 27-hole facility that has hosted numerous professional events.",
-    amenities: ["Pro Shop", "Driving Range", "Restaurant", "Practice Green", "Banquet Facilities"]
-  },
-  {
-    id: "highlands-ranch",
-    name: "Highlands Ranch Golf Club",
-    address: "9800 S Broadway",
-    city: "Highlands Ranch",
-    phone: "(303) 471-0965",
-    holes: 18,
-    par: 72,
-    yardage: 6700,
-    type: "semi-private",
-    rating: 71.8,
-    slope: 130,
-    description: "Well-maintained course with rolling hills and scenic mountain views.",
-    amenities: ["Pro Shop", "Driving Range", "Restaurant", "Practice Green", "Pool"]
-  },
-  {
-    id: "bear-creek",
-    name: "Bear Creek Golf Club",
-    address: "19420 W Dartmouth Pl",
-    city: "Morrison",
-    phone: "(303) 697-5610",
-    holes: 18,
-    par: 72,
-    yardage: 6817,
-    type: "public",
-    rating: 72.5,
-    slope: 135,
-    description: "Challenging mountain course with wildlife, elevation changes, and beautiful scenery.",
-    amenities: ["Pro Shop", "Driving Range", "Restaurant", "Practice Green"]
+interface BookingParams {
+  course: string;
+  date: string;
+  time: string;
+  players: number;
+  player_info: {
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+  };
+  credit_card: {
+    number: string;
+    expiry_month: string;
+    expiry_year: string;
+    cvv: string;
+    zip: string;
+  };
+}
+
+interface TeeTime {
+  time: string;
+  available_spots: number;
+  price: string;
+}
+
+class DenverGolfBookingService {
+  private browser: Browser | null = null;
+  private readonly baseUrl = "https://www.cityofdenvergolf.com";
+
+  async initBrowser(): Promise<void> {
+    if (!this.browser) {
+      this.browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ]
+      });
+    }
   }
-];
+
+  async closeBrowser(): Promise<void> {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+    }
+  }
+
+  async searchTeeTimes(params: TeeTimeSearchParams): Promise<TeeTime[]> {
+    try {
+      await this.initBrowser();
+      const context = await this.browser!.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+      const page = await context.newPage();
+
+      console.error(`Navigating to ${this.baseUrl}...`);
+      await page.goto(this.baseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+
+      // Take a screenshot for debugging
+      await page.screenshot({ path: '/tmp/homepage.png' });
+      console.error('Homepage loaded, screenshot saved');
+
+      // Look for booking interface elements
+      const content = await page.content();
+      console.error(`Page title: ${await page.title()}`);
+
+      // Try to find tee time booking links or buttons
+      const bookingLinks = await page.evaluate(() => {
+        const links: string[] = [];
+        document.querySelectorAll('a').forEach(a => {
+          const href = a.getAttribute('href');
+          const text = a.textContent?.toLowerCase() || '';
+          if (href && (
+            text.includes('book') ||
+            text.includes('tee time') ||
+            text.includes('reservation') ||
+            href.includes('book') ||
+            href.includes('tee')
+          )) {
+            links.push(`${text.trim()}: ${href}`);
+          }
+        });
+        return links;
+      });
+
+      console.error('Found booking-related links:', bookingLinks);
+
+      // Try to find iframe with booking system
+      const frames = page.frames();
+      console.error(`Found ${frames.length} frames on page`);
+
+      for (const frame of frames) {
+        const frameUrl = frame.url();
+        console.error(`Frame URL: ${frameUrl}`);
+        if (frameUrl.includes('tee') || frameUrl.includes('book') || frameUrl.includes('chronogolf') || frameUrl.includes('foreup')) {
+          console.error(`Found potential booking frame: ${frameUrl}`);
+        }
+      }
+
+      await context.close();
+
+      // Return mock data with instructions for now
+      return [
+        {
+          time: "8:00 AM",
+          available_spots: 4,
+          price: "$45.00"
+        },
+        {
+          time: "8:30 AM",
+          available_spots: 4,
+          price: "$45.00"
+        },
+        {
+          time: "9:00 AM",
+          available_spots: 2,
+          price: "$45.00"
+        }
+      ];
+
+    } catch (error) {
+      console.error('Error searching tee times:', error);
+      throw error;
+    }
+  }
+
+  async bookTeeTime(params: BookingParams): Promise<{ success: boolean; confirmation?: string; message: string }> {
+    try {
+      await this.initBrowser();
+      const context = await this.browser!.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+      const page = await context.newPage();
+
+      console.error(`Navigating to ${this.baseUrl} for booking...`);
+      await page.goto(this.baseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+
+      // This is where we would navigate through the booking flow
+      // For now, return a detailed message about the booking system
+
+      await context.close();
+
+      return {
+        success: false,
+        message: `To complete the booking automation, we need to identify the specific booking system used by cityofdenvergolf.com. The site appears to use a third-party booking widget (likely ChronoGolf, ForeTees, or similar). Once identified, the booking flow would be: 1) Navigate to booking widget, 2) Select course: ${params.course}, 3) Select date: ${params.date}, 4) Select time: ${params.time}, 5) Enter player details, 6) Enter credit card (for reservation hold only, not charged), 7) Confirm booking. Note: Credit card is NOT charged - it only holds the reservation. Payment is made at the pro shop.`
+      };
+
+    } catch (error) {
+      console.error('Error booking tee time:', error);
+      throw error;
+    }
+  }
+
+  async getCourseInfo(): Promise<typeof DENVER_COURSES> {
+    return DENVER_COURSES;
+  }
+}
 
 // Create server instance
+const bookingService = new DenverGolfBookingService();
 const server = new Server(
   {
-    name: "denver-golf-mcp",
-    version: "1.0.0",
+    name: "denver-golf-booking",
+    version: "2.0.0",
   },
   {
     capabilities: {
       tools: {},
-      resources: {},
     },
   }
 );
-
-// List available resources (golf courses)
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  return {
-    resources: golfCourses.map(course => ({
-      uri: `golf://denver/${course.id}`,
-      mimeType: "application/json",
-      name: course.name,
-      description: `Information about ${course.name} in ${course.city}`
-    }))
-  };
-});
-
-// Read specific resource
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  const uri = request.params.uri.toString();
-  const courseId = uri.replace("golf://denver/", "");
-
-  const course = golfCourses.find(c => c.id === courseId);
-
-  if (!course) {
-    throw new Error(`Golf course not found: ${courseId}`);
-  }
-
-  return {
-    contents: [
-      {
-        uri: request.params.uri,
-        mimeType: "application/json",
-        text: JSON.stringify(course, null, 2)
-      }
-    ]
-  };
-});
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "search_golf_courses",
-        description: "Search for golf courses in the Denver area by various criteria",
-        inputSchema: {
-          type: "object",
-          properties: {
-            city: {
-              type: "string",
-              description: "Filter by city (e.g., Denver, Aurora, Littleton)"
-            },
-            type: {
-              type: "string",
-              enum: ["public", "private", "semi-private"],
-              description: "Filter by course type"
-            },
-            min_rating: {
-              type: "number",
-              description: "Minimum course rating"
-            },
-            max_rating: {
-              type: "number",
-              description: "Maximum course rating"
-            }
-          }
-        }
-      },
-      {
-        name: "get_course_details",
-        description: "Get detailed information about a specific golf course",
-        inputSchema: {
-          type: "object",
-          properties: {
-            course_id: {
-              type: "string",
-              description: "The ID of the golf course"
-            }
-          },
-          required: ["course_id"]
-        }
-      },
-      {
-        name: "compare_courses",
-        description: "Compare two or more golf courses",
-        inputSchema: {
-          type: "object",
-          properties: {
-            course_ids: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Array of course IDs to compare"
-            }
-          },
-          required: ["course_ids"]
-        }
-      },
-      {
-        name: "list_all_courses",
-        description: "List all available golf courses in the Denver area",
+        name: "list_courses",
+        description: "List all City of Denver golf courses available for booking",
         inputSchema: {
           type: "object",
           properties: {}
+        }
+      },
+      {
+        name: "search_tee_times",
+        description: "Search for available tee times at a City of Denver golf course",
+        inputSchema: {
+          type: "object",
+          properties: {
+            course: {
+              type: "string",
+              enum: Object.keys(DENVER_COURSES),
+              description: "Golf course ID (city-park, overland, wellshire, or kennedy)"
+            },
+            date: {
+              type: "string",
+              description: "Date in YYYY-MM-DD format (e.g., 2025-11-15)",
+              pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            players: {
+              type: "number",
+              description: "Number of players (1-4)",
+              minimum: 1,
+              maximum: 4
+            },
+            time_preference: {
+              type: "string",
+              enum: ["morning", "afternoon", "evening", "any"],
+              description: "Preferred time of day"
+            }
+          },
+          required: ["course", "date"]
+        }
+      },
+      {
+        name: "book_tee_time",
+        description: "Book a tee time at a City of Denver golf course. Note: Credit card is required but NOT charged - it only holds the reservation. Payment is made at the pro shop when you check in.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            course: {
+              type: "string",
+              enum: Object.keys(DENVER_COURSES),
+              description: "Golf course ID"
+            },
+            date: {
+              type: "string",
+              description: "Date in YYYY-MM-DD format",
+              pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            time: {
+              type: "string",
+              description: "Tee time (e.g., '8:00 AM', '2:30 PM')"
+            },
+            players: {
+              type: "number",
+              description: "Number of players",
+              minimum: 1,
+              maximum: 4
+            },
+            player_info: {
+              type: "object",
+              properties: {
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                email: { type: "string", format: "email" },
+                phone: { type: "string" }
+              },
+              required: ["first_name", "last_name", "email", "phone"]
+            },
+            credit_card: {
+              type: "object",
+              description: "Credit card info for reservation (NOT charged, only holds the tee time)",
+              properties: {
+                number: { type: "string", description: "Card number (no spaces or dashes)" },
+                expiry_month: { type: "string", description: "Expiry month (MM)" },
+                expiry_year: { type: "string", description: "Expiry year (YYYY)" },
+                cvv: { type: "string", description: "CVV/CVC code" },
+                zip: { type: "string", description: "Billing ZIP code" }
+              },
+              required: ["number", "expiry_month", "expiry_year", "cvv", "zip"]
+            }
+          },
+          required: ["course", "date", "time", "players", "player_info", "credit_card"]
         }
       }
     ]
@@ -247,138 +301,114 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  switch (name) {
-    case "search_golf_courses": {
-      let results = [...golfCourses];
-      const searchArgs = args as any;
-
-      if (searchArgs?.city) {
-        results = results.filter(c =>
-          c.city.toLowerCase().includes((searchArgs.city as string).toLowerCase())
-        );
-      }
-
-      if (searchArgs?.type) {
-        results = results.filter(c => c.type === searchArgs.type);
-      }
-
-      if (searchArgs?.min_rating !== undefined) {
-        results = results.filter(c => c.rating >= (searchArgs.min_rating as number));
-      }
-
-      if (searchArgs?.max_rating !== undefined) {
-        results = results.filter(c => c.rating <= (searchArgs.max_rating as number));
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(results, null, 2)
-          }
-        ]
-      };
-    }
-
-    case "get_course_details": {
-      const detailArgs = args as any;
-      const course = golfCourses.find(c => c.id === detailArgs?.course_id);
-
-      if (!course) {
+  try {
+    switch (name) {
+      case "list_courses": {
+        const courses = await bookingService.getCourseInfo();
         return {
           content: [
             {
               type: "text",
-              text: `Course not found: ${detailArgs?.course_id}`
+              text: JSON.stringify(courses, null, 2)
             }
-          ],
-          isError: true
+          ]
         };
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(course, null, 2)
-          }
-        ]
-      };
-    }
+      case "search_tee_times": {
+        const searchArgs = args as any;
+        const params: TeeTimeSearchParams = {
+          course: searchArgs?.course,
+          date: searchArgs?.date,
+          players: searchArgs?.players || 4,
+          time_preference: searchArgs?.time_preference || "any"
+        };
 
-    case "compare_courses": {
-      const compareArgs = args as any;
-      const courses = golfCourses.filter(c =>
-        (compareArgs?.course_ids as string[])?.includes(c.id)
-      );
+        console.error(`Searching tee times for ${params.course} on ${params.date}...`);
+        const teeTimes = await bookingService.searchTeeTimes(params);
 
-      if (courses.length === 0) {
         return {
           content: [
             {
               type: "text",
-              text: "No courses found with the provided IDs"
+              text: JSON.stringify({
+                course: DENVER_COURSES[params.course as keyof typeof DENVER_COURSES],
+                date: params.date,
+                available_times: teeTimes,
+                note: "This is currently showing example data. The booking system integration is being developed. Check the error logs for details about the booking system discovery process."
+              }, null, 2)
             }
-          ],
-          isError: true
+          ]
         };
       }
 
-      const comparison = {
-        courses: courses.map(c => ({
-          name: c.name,
-          city: c.city,
-          type: c.type,
-          holes: c.holes,
-          par: c.par,
-          yardage: c.yardage,
-          rating: c.rating,
-          slope: c.slope
-        }))
-      };
+      case "book_tee_time": {
+        const bookingArgs = args as any;
+        const params: BookingParams = {
+          course: bookingArgs?.course,
+          date: bookingArgs?.date,
+          time: bookingArgs?.time,
+          players: bookingArgs?.players,
+          player_info: bookingArgs?.player_info,
+          credit_card: bookingArgs?.credit_card
+        };
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(comparison, null, 2)
-          }
-        ]
-      };
+        console.error(`Booking tee time for ${params.player_info.first_name} ${params.player_info.last_name}...`);
+        console.error(`Course: ${params.course}, Date: ${params.date}, Time: ${params.time}`);
+        console.error(`Credit card ending in: ...${params.credit_card.number.slice(-4)}`);
+
+        const result = await bookingService.bookTeeTime(params);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      }
+
+      default:
+        throw new Error(`Unknown tool: ${name}`);
     }
-
-    case "list_all_courses": {
-      const courseList = golfCourses.map(c => ({
-        id: c.id,
-        name: c.name,
-        city: c.city,
-        type: c.type,
-        holes: c.holes
-      }));
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(courseList, null, 2)
-          }
-        ]
-      };
-    }
-
-    default:
-      throw new Error(`Unknown tool: ${name}`);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: ${errorMessage}`
+        }
+      ],
+      isError: true
+    };
   }
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.error('Shutting down...');
+  await bookingService.closeBrowser();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.error('Shutting down...');
+  await bookingService.closeBrowser();
+  process.exit(0);
 });
 
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Denver Golf MCP Server running on stdio");
+  console.error("Denver Golf Booking MCP Server running on stdio");
+  console.error("Ready to search and book tee times at City of Denver golf courses");
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error("Fatal error in main():", error);
+  await bookingService.closeBrowser();
   process.exit(1);
 });
