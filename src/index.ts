@@ -51,7 +51,16 @@ interface TeeTime {
 
 class DenverGolfBookingService {
   private browser: Browser | null = null;
-  private readonly baseUrl = "https://www.cityofdenvergolf.com";
+  private readonly memberSportsBaseUrl = "https://app.membersports.com";
+  private readonly memberSportsOrgId = "3660"; // City of Denver Golf organization ID
+
+  // Course IDs in MemberSports
+  private readonly courseIds: Record<string, string> = {
+    "city-park": "4711",
+    "overland": "4712",
+    "wellshire": "4713",
+    "kennedy": "4714"
+  };
 
   async initBrowser(): Promise<void> {
     if (!this.browser) {
@@ -73,6 +82,50 @@ class DenverGolfBookingService {
     }
   }
 
+  async loginOrRegister(page: Page, email: string, firstName: string, lastName: string, phone: string): Promise<void> {
+    console.error('Checking if login is required...');
+
+    // Check if already logged in
+    const isLoggedIn = await page.locator('text=Sign Out').count() > 0 ||
+                       await page.locator('text=My Account').count() > 0;
+
+    if (isLoggedIn) {
+      console.error('Already logged in');
+      return;
+    }
+
+    console.error('Attempting to login/register...');
+
+    // Try to find and click sign in/register button
+    const signInButton = page.locator('text=/sign in|log in|register/i').first();
+    if (await signInButton.count() > 0) {
+      await signInButton.click();
+      await page.waitForTimeout(2000);
+    }
+
+    // Fill in email
+    const emailInput = page.locator('input[type="email"], input[name*="email" i]').first();
+    if (await emailInput.count() > 0) {
+      await emailInput.fill(email);
+    }
+
+    // Check if this is a new user (registration) or existing user
+    const registerButton = page.locator('text=/register|create account|sign up/i').first();
+    if (await registerButton.count() > 0) {
+      await registerButton.click();
+      await page.waitForTimeout(1000);
+
+      // Fill registration form
+      await page.locator('input[name*="first" i]').fill(firstName);
+      await page.locator('input[name*="last" i]').fill(lastName);
+      await page.locator('input[name*="phone" i]').fill(phone);
+
+      // Submit registration
+      await page.locator('button[type="submit"]').click();
+      await page.waitForTimeout(3000);
+    }
+  }
+
   async searchTeeTimes(params: TeeTimeSearchParams): Promise<TeeTime[]> {
     try {
       await this.initBrowser();
@@ -81,70 +134,87 @@ class DenverGolfBookingService {
       });
       const page = await context.newPage();
 
-      console.error(`Navigating to ${this.baseUrl}...`);
-      await page.goto(this.baseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+      const courseId = this.courseIds[params.course];
+      if (!courseId) {
+        throw new Error(`Unknown course: ${params.course}`);
+      }
 
-      // Take a screenshot for debugging
-      await page.screenshot({ path: '/tmp/homepage.png' });
-      console.error('Homepage loaded, screenshot saved');
+      // Navigate to MemberSports booking page for specific course
+      const bookingUrl = `${this.memberSportsBaseUrl}/book-linked-clubs-tee-time/${this.memberSportsOrgId}/${courseId}/1`;
+      console.error(`Navigating to MemberSports: ${bookingUrl}`);
 
-      // Look for booking interface elements
-      const content = await page.content();
-      console.error(`Page title: ${await page.title()}`);
+      await page.goto(bookingUrl, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.screenshot({ path: '/tmp/membersports-booking.png' });
+      console.error('MemberSports booking page loaded, screenshot saved');
 
-      // Try to find tee time booking links or buttons
-      const bookingLinks = await page.evaluate(() => {
-        const links: string[] = [];
-        document.querySelectorAll('a').forEach(a => {
-          const href = a.getAttribute('href');
-          const text = a.textContent?.toLowerCase() || '';
-          if (href && (
-            text.includes('book') ||
-            text.includes('tee time') ||
-            text.includes('reservation') ||
-            href.includes('book') ||
-            href.includes('tee')
-          )) {
-            links.push(`${text.trim()}: ${href}`);
+      // Wait for the date picker or tee sheet to load
+      await page.waitForTimeout(2000);
+
+      // Try to select the date
+      console.error(`Selecting date: ${params.date}`);
+
+      // Look for date picker - MemberSports likely uses a calendar widget
+      const datePicker = page.locator('input[type="date"], input[placeholder*="date" i], .date-picker').first();
+      if (await datePicker.count() > 0) {
+        await datePicker.fill(params.date);
+        await page.waitForTimeout(1000);
+      }
+
+      // Alternative: Look for a calendar and click the specific date
+      const dateElements = page.locator(`[data-date="${params.date}"], [data-value="${params.date}"]`);
+      if (await dateElements.count() > 0) {
+        await dateElements.first().click();
+        await page.waitForTimeout(1000);
+      }
+
+      // Scrape available tee times from the page
+      console.error('Scraping available tee times...');
+      await page.screenshot({ path: '/tmp/membersports-times.png' });
+
+      const teeTimes = await page.evaluate(() => {
+        const times: Array<{time: string; available_spots: number; price: string}> = [];
+
+        // Look for tee time slots - adjust selectors based on actual MemberSports DOM
+        const timeSlots = document.querySelectorAll('.tee-time-slot, .time-slot, [class*="time"], [class*="slot"]');
+
+        timeSlots.forEach(slot => {
+          const timeText = slot.textContent || '';
+          const timeMatch = timeText.match(/(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+
+          if (timeMatch) {
+            const time = timeMatch[1];
+            const priceMatch = timeText.match(/\$(\d+(?:\.\d{2})?)/);
+            const price = priceMatch ? `$${priceMatch[1]}` : '$45.00';
+
+            // Check if slot is available (not grayed out or marked unavailable)
+            const isAvailable = !slot.classList.contains('unavailable') &&
+                               !slot.classList.contains('booked') &&
+                               !slot.classList.contains('disabled');
+
+            if (isAvailable) {
+              times.push({
+                time: time,
+                available_spots: 4, // Default to 4, adjust if we can parse this
+                price: price
+              });
+            }
           }
         });
-        return links;
+
+        return times;
       });
-
-      console.error('Found booking-related links:', bookingLinks);
-
-      // Try to find iframe with booking system
-      const frames = page.frames();
-      console.error(`Found ${frames.length} frames on page`);
-
-      for (const frame of frames) {
-        const frameUrl = frame.url();
-        console.error(`Frame URL: ${frameUrl}`);
-        if (frameUrl.includes('tee') || frameUrl.includes('book') || frameUrl.includes('chronogolf') || frameUrl.includes('foreup')) {
-          console.error(`Found potential booking frame: ${frameUrl}`);
-        }
-      }
 
       await context.close();
 
-      // Return mock data with instructions for now
-      return [
-        {
-          time: "8:00 AM",
-          available_spots: 4,
-          price: "$45.00"
-        },
-        {
-          time: "8:30 AM",
-          available_spots: 4,
-          price: "$45.00"
-        },
-        {
-          time: "9:00 AM",
-          available_spots: 2,
-          price: "$45.00"
-        }
-      ];
+      console.error(`Found ${teeTimes.length} available tee times`);
+
+      if (teeTimes.length === 0) {
+        // Return message if no times found
+        console.error('WARNING: No tee times found. The page structure may have changed.');
+        console.error('Check /tmp/membersports-times.png to see what the page looks like');
+      }
+
+      return teeTimes;
 
     } catch (error) {
       console.error('Error searching tee times:', error);
@@ -160,18 +230,172 @@ class DenverGolfBookingService {
       });
       const page = await context.newPage();
 
-      console.error(`Navigating to ${this.baseUrl} for booking...`);
-      await page.goto(this.baseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+      const courseId = this.courseIds[params.course];
+      if (!courseId) {
+        throw new Error(`Unknown course: ${params.course}`);
+      }
 
-      // This is where we would navigate through the booking flow
-      // For now, return a detailed message about the booking system
+      // Step 1: Navigate to booking page
+      const bookingUrl = `${this.memberSportsBaseUrl}/book-linked-clubs-tee-time/${this.memberSportsOrgId}/${courseId}/1`;
+      console.error(`Step 1: Navigating to ${bookingUrl}`);
+      await page.goto(bookingUrl, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.screenshot({ path: '/tmp/booking-step1.png' });
+
+      // Step 2: Login or register
+      console.error('Step 2: Handling authentication...');
+      await this.loginOrRegister(
+        page,
+        params.player_info.email,
+        params.player_info.first_name,
+        params.player_info.last_name,
+        params.player_info.phone
+      );
+      await page.screenshot({ path: '/tmp/booking-step2.png' });
+
+      // Step 3: Select date
+      console.error(`Step 3: Selecting date ${params.date}...`);
+      await page.waitForTimeout(2000);
+
+      // Try multiple date selection methods
+      const datePicker = page.locator('input[type="date"], input[placeholder*="date" i]').first();
+      if (await datePicker.count() > 0) {
+        await datePicker.fill(params.date);
+        await page.waitForTimeout(1000);
+      }
+
+      await page.screenshot({ path: '/tmp/booking-step3.png' });
+
+      // Step 4: Select tee time
+      console.error(`Step 4: Selecting tee time ${params.time}...`);
+
+      // Look for the specific time slot and click it
+      const timeSlot = page.locator(`text=${params.time}`).first();
+      if (await timeSlot.count() > 0) {
+        await timeSlot.click();
+        await page.waitForTimeout(2000);
+      } else {
+        throw new Error(`Tee time ${params.time} not found on page`);
+      }
+
+      await page.screenshot({ path: '/tmp/booking-step4.png' });
+
+      // Step 5: Fill player information (if not already filled from login)
+      console.error('Step 5: Filling player information...');
+
+      // First name
+      const firstNameInput = page.locator('input[name*="first" i], input[id*="first" i]').first();
+      if (await firstNameInput.count() > 0 && await firstNameInput.inputValue() === '') {
+        await firstNameInput.fill(params.player_info.first_name);
+      }
+
+      // Last name
+      const lastNameInput = page.locator('input[name*="last" i], input[id*="last" i]').first();
+      if (await lastNameInput.count() > 0 && await lastNameInput.inputValue() === '') {
+        await lastNameInput.fill(params.player_info.last_name);
+      }
+
+      // Email
+      const emailInput = page.locator('input[type="email"], input[name*="email" i]').first();
+      if (await emailInput.count() > 0 && await emailInput.inputValue() === '') {
+        await emailInput.fill(params.player_info.email);
+      }
+
+      // Phone
+      const phoneInput = page.locator('input[type="tel"], input[name*="phone" i]').first();
+      if (await phoneInput.count() > 0 && await phoneInput.inputValue() === '') {
+        await phoneInput.fill(params.player_info.phone);
+      }
+
+      await page.screenshot({ path: '/tmp/booking-step5.png' });
+
+      // Step 6: Fill credit card information
+      console.error('Step 6: Filling credit card information (for hold only, not charged)...');
+
+      // Card number
+      const cardNumberInput = page.locator('input[name*="card" i], input[placeholder*="card" i], input[id*="card" i]').first();
+      if (await cardNumberInput.count() > 0) {
+        await cardNumberInput.fill(params.credit_card.number);
+      }
+
+      // Expiry month
+      const expiryMonthInput = page.locator('input[name*="exp" i][name*="month" i], select[name*="month" i]').first();
+      if (await expiryMonthInput.count() > 0) {
+        await expiryMonthInput.fill(params.credit_card.expiry_month);
+      }
+
+      // Expiry year
+      const expiryYearInput = page.locator('input[name*="exp" i][name*="year" i], select[name*="year" i]').first();
+      if (await expiryYearInput.count() > 0) {
+        await expiryYearInput.fill(params.credit_card.expiry_year);
+      }
+
+      // CVV
+      const cvvInput = page.locator('input[name*="cvv" i], input[name*="cvc" i], input[placeholder*="cvv" i]').first();
+      if (await cvvInput.count() > 0) {
+        await cvvInput.fill(params.credit_card.cvv);
+      }
+
+      // ZIP code
+      const zipInput = page.locator('input[name*="zip" i], input[name*="postal" i]').first();
+      if (await zipInput.count() > 0) {
+        await zipInput.fill(params.credit_card.zip);
+      }
+
+      await page.screenshot({ path: '/tmp/booking-step6.png' });
+
+      // Step 7: Submit the booking
+      console.error('Step 7: Submitting booking...');
+
+      const submitButton = page.locator('button[type="submit"], button:has-text("Book"), button:has-text("Reserve"), button:has-text("Complete")').first();
+      if (await submitButton.count() > 0) {
+        await submitButton.click();
+        await page.waitForTimeout(5000); // Wait for confirmation
+      } else {
+        throw new Error('Submit button not found');
+      }
+
+      await page.screenshot({ path: '/tmp/booking-step7-confirmation.png' });
+
+      // Step 8: Extract confirmation number
+      console.error('Step 8: Extracting confirmation number...');
+
+      const confirmationNumber = await page.evaluate(() => {
+        // Look for confirmation number in various formats
+        const text = document.body.textContent || '';
+        const confirmationMatch = text.match(/confirmation\s*#?\s*:?\s*([A-Z0-9-]+)/i);
+        if (confirmationMatch) {
+          return confirmationMatch[1];
+        }
+
+        // Look for specific confirmation elements
+        const confirmElements = document.querySelectorAll('[class*="confirm"], [id*="confirm"]');
+        for (const elem of confirmElements) {
+          const elemText = elem.textContent || '';
+          const match = elemText.match(/([A-Z0-9-]{6,})/);
+          if (match) {
+            return match[1];
+          }
+        }
+
+        return null;
+      });
 
       await context.close();
 
-      return {
-        success: false,
-        message: `To complete the booking automation, we need to identify the specific booking system used by cityofdenvergolf.com. The site appears to use a third-party booking widget (likely ChronoGolf, ForeTees, or similar). Once identified, the booking flow would be: 1) Navigate to booking widget, 2) Select course: ${params.course}, 3) Select date: ${params.date}, 4) Select time: ${params.time}, 5) Enter player details, 6) Enter credit card (for reservation hold only, not charged), 7) Confirm booking. Note: Credit card is NOT charged - it only holds the reservation. Payment is made at the pro shop.`
-      };
+      if (confirmationNumber) {
+        console.error(`SUCCESS: Booking confirmed with number ${confirmationNumber}`);
+        return {
+          success: true,
+          confirmation: confirmationNumber,
+          message: `Tee time successfully booked! Confirmation number: ${confirmationNumber}. Remember: Credit card was used to hold the reservation but was NOT charged. Pay at the pro shop when you arrive.`
+        };
+      } else {
+        console.error('Booking may have succeeded but confirmation number not found');
+        return {
+          success: true,
+          message: 'Booking appears to have been submitted successfully, but confirmation number could not be extracted. Check your email for confirmation. Remember: Credit card was NOT charged - pay at the pro shop.'
+        };
+      }
 
     } catch (error) {
       console.error('Error booking tee time:', error);

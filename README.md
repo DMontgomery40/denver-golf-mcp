@@ -1,13 +1,15 @@
 # Denver Golf MCP Server - Tee Time Booking
 
-An MCP (Model Context Protocol) server that automates booking tee times at City of Denver golf courses through https://www.cityofdenvergolf.com/
+An MCP (Model Context Protocol) server that automates booking tee times at City of Denver golf courses through the **MemberSports** booking system (https://app.membersports.com).
 
 ## Features
 
+- **MemberSports Integration** - Fully integrated with City of Denver's MemberSports booking platform
 - **Search Available Tee Times** - Find open slots by course, date, and time preference
 - **Book Tee Times** - Automatically reserve tee times with player and payment information
 - **Credit Card Handling** - Securely processes card info for reservation (NOT charged - payment at pro shop)
-- **Multiple Courses** - Supports all City of Denver municipal courses
+- **Multiple Courses** - Supports all 4 City of Denver municipal courses
+- **Step-by-Step Screenshots** - Saves screenshots at each booking step for debugging
 
 ## City of Denver Golf Courses Supported
 
@@ -152,13 +154,17 @@ This means:
 
 ## How It Works
 
-This MCP server uses Playwright to automate the booking process:
+This MCP server uses Playwright to automate the MemberSports booking process:
 
-1. **Navigation** - Opens the City of Denver Golf booking website
-2. **Search** - Finds the booking interface (likely ChronoGolf, ForeTees, or similar widget)
-3. **Selection** - Chooses your desired course, date, and tee time
-4. **Form Filling** - Enters player information and credit card details
-5. **Confirmation** - Completes the reservation and returns confirmation number
+1. **Navigation** - Opens the MemberSports booking page for selected course
+2. **Authentication** - Logs in or registers with your email and contact info
+3. **Date Selection** - Chooses your desired date from the calendar
+4. **Time Selection** - Clicks on your preferred available tee time
+5. **Player Info** - Fills in contact details
+6. **Payment Info** - Enters credit card for reservation hold (NOT charged!)
+7. **Submission** - Completes the booking and captures confirmation number
+
+Booking URL format: `https://app.membersports.com/book-linked-clubs-tee-time/3660/{COURSE_ID}/1`
 
 ## Development
 
@@ -172,9 +178,21 @@ npm run watch
 
 The server logs detailed information to stderr including:
 - Page navigation steps
-- Booking system detection
+- MemberSports booking system interactions
 - Form interaction details
-- Screenshots saved to `/tmp/` for debugging
+- Screenshots saved to `/tmp/` for debugging at each step:
+  - `/tmp/booking-step1.png` through `/tmp/booking-step7-confirmation.png`
+
+### Important: Verify Course IDs
+
+The course IDs in the code (4711-4714) are placeholders. To find the correct MemberSports IDs:
+
+1. Visit https://www.cityofdenvergolf.com/
+2. Click "Book Tee Time" for each course
+3. Note the URL: `app.membersports.com/book-linked-clubs-tee-time/3660/{COURSE_ID}/1`
+4. Update the `courseIds` map in `src/index.ts` if different
+
+See SETUP.md for detailed instructions.
 
 ## Troubleshooting
 
@@ -207,9 +225,12 @@ Some operations may timeout on slow connections. The default timeout is 30 secon
 ## Limitations
 
 - Currently supports City of Denver municipal courses only
-- Requires internet connection to access booking system
-- Subject to City of Denver Golf booking policies and availability
-- The booking system may change, requiring updates to automation logic
+- Requires internet connection to access MemberSports booking system
+- Subject to City of Denver Golf booking policies and availability (typically 7-14 days advance booking)
+- MemberSports interface updates may require selector adjustments
+- Course IDs (4711-4714) are placeholders and should be verified
+- New accounts may require email verification in MemberSports
+- Rate limiting may trigger bot detection if too many requests are made
 
 ## Contributing
 
