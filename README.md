@@ -76,7 +76,35 @@ Lists all City of Denver golf courses available for booking.
 // No parameters required
 ```
 
-### 2. search_tee_times
+### 2. discover_course_ids
+
+**Important: Run this first!** Automatically discovers the real MemberSports course IDs by visiting cityofdenvergolf.com and extracting booking URLs.
+
+```typescript
+// No parameters required
+```
+
+This tool will:
+- Visit each course page on cityofdenvergolf.com
+- Extract MemberSports booking URLs
+- Parse the real course IDs
+- Compare with hardcoded values
+- Tell you if you need to update the code
+
+**Example output:**
+```json
+{
+  "message": "Course ID discovery complete!",
+  "discovered_ids": {
+    "city-park": {"id": "4711", "url": "...", "name": "..."},
+    "overland": {"id": "4712", "url": "...", "name": "..."}
+  },
+  "current_ids": {...},
+  "instructions": "If discovered IDs differ, update courseIds in src/index.ts:60"
+}
+```
+
+### 3. search_tee_times
 
 Search for available tee times at a specific course and date.
 
@@ -109,7 +137,7 @@ Search for available tee times at a specific course and date.
 }
 ```
 
-### 3. book_tee_time
+### 4. book_tee_time
 
 Book a tee time at a City of Denver golf course.
 

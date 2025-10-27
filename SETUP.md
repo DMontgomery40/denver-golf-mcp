@@ -51,13 +51,30 @@ Add to your Claude Desktop config:
 }
 ```
 
-### Step 3: Start Using It!
+### Step 3: Discover Real Course IDs
+
+**Important first step!** Run the discovery tool to find the real MemberSports course IDs:
+
+```
+discover_course_ids
+```
+
+This will:
+- Visit each course page on cityofdenvergolf.com
+- Extract the real MemberSports booking URLs
+- Show you the actual course IDs
+- Tell you if you need to update the code
+
+If the discovered IDs differ from the defaults (4711-4714), update `src/index.ts:60` and rebuild with `npm run build`.
+
+### Step 4: Start Booking!
 
 You can now:
 
 1. **List courses**: `list_courses`
-2. **Search tee times**: `search_tee_times` with course, date, and preferences
-3. **Book tee times**: `book_tee_time` with full booking details
+2. **Discover course IDs**: `discover_course_ids` (run this first!)
+3. **Search tee times**: `search_tee_times` with course, date, and preferences
+4. **Book tee times**: `book_tee_time` with full booking details
 
 ## How MemberSports Integration Works
 
@@ -148,11 +165,7 @@ To test without actually submitting bookings:
 
 ## Known Limitations
 
-1. **Course IDs**: The actual MemberSports course IDs may differ from the placeholders (4711-4714). To find real IDs:
-   - Visit https://www.cityofdenvergolf.com/
-   - Click "Book Tee Time" for each course
-   - Note the URL: `app.membersports.com/book-linked-clubs-tee-time/3660/{COURSE_ID}/1`
-   - Update the `courseIds` map in `src/index.ts`
+1. **Course IDs**: The default course IDs (4711-4714) may not be correct. Use the `discover_course_ids` tool to find the real IDs and update the code if needed.
 
 2. **Login Requirements**: MemberSports may require email verification for new accounts
 
