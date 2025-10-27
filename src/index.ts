@@ -55,6 +55,8 @@ class DenverGolfBookingService {
   private readonly memberSportsOrgId = "3660"; // City of Denver Golf organization ID
 
   // Course IDs in MemberSports
+  // Note: 4711 is confirmed from https://app.membersports.com/custom/3660/4711/19
+  // Others (4712-4714) are sequential guesses - use discover_course_ids tool to verify
   private readonly courseIds: Record<string, string> = {
     "city-park": "4711",
     "overland": "4712",
@@ -403,6 +405,82 @@ class DenverGolfBookingService {
     }
   }
 
+  async discoverCourseIds(): Promise<Record<string, {id: string; url: string; name?: string}>> {
+    try {
+      await this.initBrowser();
+      const context = await this.browser!.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+      const page = await context.newPage();
+
+      console.error('Discovering course IDs from cityofdenvergolf.com...');
+      await page.goto('https://www.cityofdenvergolf.com/locations/', { waitUntil: 'networkidle', timeout: 30000 });
+      await page.screenshot({ path: '/tmp/course-discovery.png' });
+
+      // Extract all booking links
+      const courseLinks = await page.evaluate(() => {
+        const links: Array<{text: string; href: string}> = [];
+        document.querySelectorAll('a').forEach(a => {
+          const href = a.getAttribute('href') || '';
+          const text = a.textContent?.trim() || '';
+          if (href.includes('membersports') || href.includes('book') || text.toLowerCase().includes('book')) {
+            links.push({ text, href });
+          }
+        });
+        return links;
+      });
+
+      console.error('Found booking links:', JSON.stringify(courseLinks, null, 2));
+
+      // Try to visit each course page
+      const discovered: Record<string, {id: string; url: string; name?: string}> = {};
+
+      for (const course of Object.keys(DENVER_COURSES)) {
+        const courseUrl = `https://www.cityofdenvergolf.com/${course}/`;
+        console.error(`Checking ${courseUrl}...`);
+
+        try {
+          await page.goto(courseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+          await page.waitForTimeout(2000);
+
+          // Look for MemberSports booking link
+          const bookingLink = await page.evaluate(() => {
+            const links = document.querySelectorAll('a');
+            for (const link of links) {
+              const href = link.getAttribute('href') || '';
+              if (href.includes('app.membersports.com')) {
+                return href;
+              }
+            }
+            return null;
+          });
+
+          if (bookingLink) {
+            // Extract course ID from URL
+            const match = bookingLink.match(/\/(\d+)\/\d+\/?$/);
+            if (match) {
+              discovered[course] = {
+                id: match[1],
+                url: bookingLink,
+                name: DENVER_COURSES[course as keyof typeof DENVER_COURSES]
+              };
+              console.error(`Found ${course}: ID = ${match[1]}`);
+            }
+          }
+        } catch (err) {
+          console.error(`Error checking ${course}:`, err);
+        }
+      }
+
+      await context.close();
+      return discovered;
+
+    } catch (error) {
+      console.error('Error discovering course IDs:', error);
+      throw error;
+    }
+  }
+
   async getCourseInfo(): Promise<typeof DENVER_COURSES> {
     return DENVER_COURSES;
   }
@@ -429,6 +507,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "list_courses",
         description: "List all City of Denver golf courses available for booking",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      {
+        name: "discover_course_ids",
+        description: "Discover the real MemberSports course IDs by visiting cityofdenvergolf.com and extracting booking URLs. Use this to verify or update the course ID mappings.",
         inputSchema: {
           type: "object",
           properties: {}
@@ -534,6 +620,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: JSON.stringify(courses, null, 2)
+            }
+          ]
+        };
+      }
+
+      case "discover_course_ids": {
+        console.error('Starting course ID discovery...');
+        const discovered = await bookingService.discoverCourseIds();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                message: "Course ID discovery complete! Update src/index.ts with these IDs if they differ from current values.",
+                discovered_ids: discovered,
+                current_ids: {
+                  "city-park": "4711",
+                  "overland": "4712",
+                  "wellshire": "4713",
+                  "kennedy": "4714"
+                },
+                instructions: "If discovered IDs differ, update the courseIds map in src/index.ts:60 and rebuild with 'npm run build'"
+              }, null, 2)
             }
           ]
         };
