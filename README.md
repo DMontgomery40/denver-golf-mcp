@@ -60,10 +60,29 @@ Add this to your Claude Desktop configuration:
 }
 ```
 
-### Standalone Usage
+### Standalone Usage (stdio)
 
 ```bash
 node build/index.js
+```
+
+### Streamable HTTP Transport
+
+```bash
+MCP_TRANSPORT=http MCP_HTTP_PORT=3000 node build/index.js
+```
+
+Or use the npm script:
+
+```bash
+npm run start:http
+```
+
+### Docker
+
+```bash
+docker build -t denver-golf-mcp .
+docker run -p 3000:3000 denver-golf-mcp
 ```
 
 ## Available Tools
@@ -283,3 +302,53 @@ This tool is provided as-is for convenience in booking tee times. Users are resp
 - Canceling reservations if unable to play
 
 Misuse of automated booking systems may violate terms of service.
+
+---
+
+## Appendix: MCP in Practice (Code Execution, Tool Scale, and Safety)
+
+Last updated: 2026-03-23
+
+### Why This Appendix Exists
+Model Context Protocol (MCP) is still one of the most useful interoperability layers for tools and agents. The tradeoff is that large MCP servers can expose many tools, and naive tool-calling can flood context windows with schemas, tool chatter, and irrelevant call traces.
+
+In practice, "more tools" is not always "better outcomes." Tool surface area must be paired with execution patterns that keep token use bounded and behavior predictable.
+
+### The Shift to Code Execution / Code Mode
+Recent workflows increasingly move complex orchestration out of chat context and into code execution loops. This reduces repetitive schema tokens and makes tool usage auditable and testable.
+
+Core reading:
+- [Cloudflare: Code Mode](https://blog.cloudflare.com/code-mode/)
+- [Cloudflare: Code Execution with MCP](https://blog.cloudflare.com/code-execution-with-mcp/)
+- [Anthropic: Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)
+
+### Recommended Setup for Power Users
+For users who want reproducible and lower-noise MCP usage, start with a codemode-oriented setup:
+- [codemode-mcp (jx-codes)](https://github.com/jx-codes/codemode-mcp)
+- [UTCP](https://www.utcp.io)
+
+Practical caveat: even with strong setup, model behavior can still be inconsistent across providers and versions. Keep retries, guardrails, and deterministic fallbacks in place.
+
+### Client Fit Guide (Short Version)
+- Claude Code / Codex / Cursor: strong for direct MCP workflows, but still benefit from narrow tool surfaces.
+- Code execution wrappers (TypeScript/Python CLIs): better when tool count is high or task chains are multi-step.
+- Hosted chat clients with weaker MCP controls: often safer via pre-wrapped CLIs or gateway tools.
+
+### Prompt Injection: Risks, Impact, and Mitigations
+Prompt injection remains an open security problem for tool-using agents. It is manageable, but not "solved."
+
+Primary risks:
+- Malicious instructions hidden in tool output or remote content.
+- Secret exfiltration and unauthorized external calls.
+- Unsafe state changes (destructive file/system/API actions).
+
+Mitigation baseline:
+- Least privilege for credentials and tool scopes.
+- Allowlist destinations and enforce egress controls.
+- Strict input validation and schema enforcement.
+- Human confirmation for destructive/high-risk actions.
+- Sandboxed execution with resource/time limits.
+- Structured logging, audit trails, and replayable runs.
+- Output filtering/redaction before model re-ingestion.
+
+Treat every tool output as untrusted input unless explicitly verified.
